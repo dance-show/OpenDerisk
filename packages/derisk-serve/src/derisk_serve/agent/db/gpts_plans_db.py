@@ -14,6 +14,11 @@ class GptsPlansEntity(Model):
     conv_id = Column(
         String(255), nullable=False, comment="The unique id of the conversation record"
     )
+    conv_session_id = Column(
+        String(255), nullable=False, comment="The unique id of the conversation session"
+    )
+    task_uid = Column(String(255), nullable=False, comment="The uid of the plan task")
+    sub_task_num = Column(Integer, nullable=False, comment="Subtask id")
     conv_round = Column(Integer, nullable=False, comment="The dialogue turns")
     conv_round_id = Column(String(255), nullable=True, comment="The dialogue turns uid")
 
@@ -59,14 +64,16 @@ class GptsPlansDao(BaseDao):
         session.close()
 
     def get_by_conv_id(
-        self, conv_id: str, conv_round: Optional[int] = None
+        self, conv_id: str, conv_round_id: Optional[str] = None
     ) -> list[GptsPlansEntity]:
         session = self.get_raw_session()
         gpts_plans = session.query(GptsPlansEntity)
         if conv_id:
             gpts_plans = gpts_plans.filter(GptsPlansEntity.conv_id == conv_id)
-        if conv_round:
-            gpts_plans = gpts_plans.filter(GptsPlansEntity.conv_round == conv_round)
+        if conv_round_id:
+            gpts_plans = gpts_plans.filter(
+                GptsPlansEntity.conv_round_id == conv_round_id
+            )
         result = gpts_plans.all()
         session.close()
         return result

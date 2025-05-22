@@ -1,7 +1,7 @@
 import logging
 import os
 import sys
-from typing import List
+from typing import List, Optional
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -53,17 +53,21 @@ replace_router(app)
 system_app = SystemApp(app)
 
 
-def mount_routers(app: FastAPI):
+def mount_routers(app: FastAPI, param: Optional[ApplicationConfig] = None):
     """Lazy import to avoid high time cost"""
     from derisk_app.knowledge.api import router as knowledge_router
     from derisk_app.openapi.api_v1.api_v1 import router as api_v1
+    from derisk_app.openapi.api_v1.editor.api_editor_v1 import (
+        router as api_editor_route_v1,
+    )
     from derisk_app.openapi.api_v1.feedback.api_fb_v1 import router as api_fb_v1
     from derisk_app.openapi.api_v2.api_v2 import router as api_v2
-    from derisk_serve.agent.app.controller import router as gpts_v1
     from derisk_serve.agent.app.endpoints import router as app_v2
+    from derisk_serve.agent.app.controller import router as gpts_v1
 
     app.include_router(api_v1, prefix="/api", tags=["Chat"])
     app.include_router(api_v2, prefix="/api", tags=["ChatV2"])
+    app.include_router(api_editor_route_v1, prefix="/api", tags=["Editor"])
     app.include_router(api_fb_v1, prefix="/api", tags=["FeedBack"])
     app.include_router(gpts_v1, prefix="/api", tags=["GptsApp"])
     app.include_router(app_v2, prefix="/api", tags=["App"])
@@ -75,6 +79,14 @@ def mount_routers(app: FastAPI):
     )
 
     app.include_router(recommend_question_v1, prefix="/api", tags=["RecommendQuestion"])
+
+    ##  ⬇️⬇️⬇️⬇️⬇️⬇️
+    ## 启动MCP注册中心， 默认关闭，线下调试使用可手动开启
+    if param and param.service.web.enable_mcp_gateway:
+        from derisk_ext.mcp.gateway import McpserverParam, run_mcp_port
+        mcp_server_param = McpserverParam()
+        run_mcp_port(app, mcp_server_param)
+    ## ⬆️⬆️⬆️⬆️⬆️⬆️
 
 
 def mount_static_files(app: FastAPI, param: ApplicationConfig):
@@ -136,7 +148,7 @@ def initialize_app(param: ApplicationConfig, args: List[str] = None):
     print(param)
 
     server_init(param, system_app)
-    mount_routers(app)
+    mount_routers(app, param)
     model_start_listener = _create_model_start_listener(system_app)
     initialize_components(
         param,
@@ -229,7 +241,7 @@ def run_webserver(config_file: str):
     param = load_config(config_file)
     trace_config = param.service.web.trace or param.trace
     trace_file = trace_config.file or os.path.join(
-        "logs", "derisk_webserver_tracer.jsonl"
+        LOGDIR or "logs", "derisk_webserver_tracer.jsonl"
     )
     config = system_app.config
     config.configs["app_config"] = param

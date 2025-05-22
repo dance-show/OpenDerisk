@@ -1,5 +1,6 @@
 """Code Assistant Agent."""
 
+import uuid
 from typing import Optional, Tuple
 
 from derisk.core import ModelMessageRoleType
@@ -128,7 +129,7 @@ class CodeAssistantAgent(ConversableAgent):
         action_report = message.action_report
         if not action_report:
             return False, "No execution solution results were checked"
-        check_result, model = await self.thinking(
+        thinking, check_result, model = await self.thinking(
             messages=[
                 AgentMessage(
                     role=ModelMessageRoleType.HUMAN,
@@ -138,6 +139,7 @@ class CodeAssistantAgent(ConversableAgent):
                     f"Execution Result: {action_report.content}",
                 )
             ],
+            reply_message_id=uuid.uuid4().hex,
             prompt=CHECK_RESULT_SYSTEM_MESSAGE,
         )
         success = str_to_bool(check_result)

@@ -3,7 +3,7 @@ import { LoadingOutlined } from '@ant-design/icons';
 import { Button, Input, Spin } from 'antd';
 import classNames from 'classnames';
 import { useSearchParams } from 'next/navigation';
-import React, { useContext, useMemo, useRef, useState } from 'react';
+import React, { useContext, useMemo, useRef, useState, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import ToolsBar from './ToolsBar';
@@ -127,4 +127,4 @@ const ChatInputPanel: React.FC<{ ctrl: AbortController }> = ({ ctrl }) => {
   );
 };
 
-export default ChatInputPanel;
+export default memo(ChatInputPanel);

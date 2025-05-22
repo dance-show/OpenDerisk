@@ -419,3 +419,55 @@ export const delApp = (data: Record<string, string>) => {
 export const getSpaceConfig = () => {
   return GET<string, SpaceConfig>(`/knowledge/space/config`);
 };
+
+/** MPC */
+export const getMPCList = (data: Record<string, string>,other: Record<string, string>) => {
+  return POST<Record<string, string>, []>(`/api/v1/serve/mcp/query_fuzzy?page=${other?.page}&page_size=${other?.page_size}`,data);
+};
+
+/** MPC */
+export const getMPCListQuery = (data: Record<string, string>) => {
+  return POST<Record<string, string>, []>(`/api/v1/serve/mcp/query`,data);
+};
+
+/** MPC Creat*/
+export const addMCP = (data: Record<string, string>) => {
+  return POST<Record<string, string>, []>('/api/v1/serve/mcp/',data);
+};
+
+/** MPC Start*/
+export const startMCP = (data: Record<string, string>) => {
+  return POST<Record<string, string>, []>('/api/v1/serve/mcp/start',data);
+};
+
+
+/** MPC Offline*/
+export const offlineMCP = (data: Record<string, string>) => {
+  return POST<Record<string, string>, []>('/api/v1/serve/mcp/offline',data);
+};
+
+
+/** MPC tool run*/
+export const mcpToolRun = (data: Record<string, string>) => {
+  return POST<Record<string, string>, []>('/api/v1/serve/mcp/tool/run',data);
+};
+
+/** MPC tool list*/
+export const mcpToolList = (data: Record<string, string>) => {
+  return POST<Record<string, string>, []>('/api/v1/serve/mcp/tool/list',data);
+};
+
+
+/** MPC tool connect*/
+export const mcpToolConnect = (data: Record<string, string>) => {
+  return POST<Record<string, string>, []>('/api/v1/serve/mcp/connect',data);
+};
+
+
+/** MPC tool connect*/
+export const initConfig= (data?: Record<string, string>) => {
+  return POST<Record<string, string>, []>('/api/v1/init/config',data);
+};
+
+
+

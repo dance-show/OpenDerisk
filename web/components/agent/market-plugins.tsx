@@ -105,7 +105,6 @@ function MarketPlugins() {
   //   [actionIndex, pluginAction],
   // );
 
-  console.log(agents);
 
   return (
     <Spin spinning={loading}>

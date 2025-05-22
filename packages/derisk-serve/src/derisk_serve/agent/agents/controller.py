@@ -2,19 +2,20 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 from abc import ABC
-from typing import Any, Dict, List, Optional, Type
+from copy import deepcopy
+from typing import Any, Dict, List, Optional, Type, AsyncGenerator
 
-from fastapi import APIRouter
+from fastapi import APIRouter, BackgroundTasks
+from fastapi.responses import StreamingResponse
 
 from derisk._private.config import Config
 from derisk.agent import (
-    Agent,
     AgentContext,
     AgentMemory,
     AutoPlanChatManager,
     ConversableAgent,
-    DefaultAWELLayoutManager,
     EnhancedShortTermMemory,
     GptsMemory,
     HybridMemory,
@@ -25,9 +26,9 @@ from derisk.agent import (
 )
 from derisk.agent.core.base_team import ManagerAgent
 from derisk.agent.core.memory.gpts import GptsMessage
-from derisk.vis.gpt_vis_converter import GptVisConverter
+from derisk_ext.vis.gptvis.gpt_vis_converter import GptVisConverter
 from derisk.agent.core.schema import Status
-from derisk.agent.resource import get_resource_manager
+from derisk.agent.resource import get_resource_manager, ResourceManager
 from derisk.agent.util.llm.llm import LLMStrategyType
 from derisk.component import BaseComponent, ComponentType, SystemApp
 from derisk.core import PromptTemplate
@@ -37,7 +38,7 @@ from derisk.model.cluster import WorkerManagerFactory
 from derisk.model.cluster.client import DefaultLLMClient
 from derisk.util.executor_utils import ExecutorFactory
 from derisk.util.json_utils import serialize
-from derisk.util.tracer import TracerManager
+from derisk.util.tracer.tracer_impl import root_tracer
 from derisk_app.derisk_server import system_app
 from derisk_app.scene.base import ChatScene
 from derisk_serve.conversation.serve import Serve as ConversationServe
@@ -47,7 +48,7 @@ from derisk_serve.prompt.service import service as PromptService
 
 from ...rag.retriever.knowledge_space import KnowledgeSpaceRetriever
 from ..db import GptsMessagesDao
-from ..db.gpts_app import GptsApp, GptsAppDao, GptsAppQuery
+from ..db.gpts_app import GptsApp, GptsAppDao, GptsAppQuery, GptsAppDetail
 from ..db.gpts_conversations_db import GptsConversationsDao, GptsConversationsEntity
 from ..team.base import TeamMode
 from .derisks_memory import MetaDerisksMessageMemory, MetaDerisksPlansMemory
@@ -56,18 +57,17 @@ CFG = Config()
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-root_tracer: TracerManager = TracerManager()
 
 
 def _build_conversation(
-    conv_id: str,
-    select_param: Dict[str, Any],
-    model_name: str,
-    summary: str,
-    app_code: str,
-    conv_serve: ConversationServe,
-    user_name: Optional[str] = "",
-    sys_code: Optional[str] = "",
+        conv_id: str,
+        select_param: Dict[str, Any],
+        model_name: str,
+        summary: str,
+        app_code: str,
+        conv_serve: ConversationServe,
+        user_name: Optional[str] = "",
+        sys_code: Optional[str] = "",
 ) -> StorageConversation:
     return StorageConversation(
         conv_uid=conv_id,
@@ -160,24 +160,20 @@ class MultiAgents(BaseComponent, ABC):
         return agent_memory
 
     async def agent_chat_v2(
-        self,
-        conv_id: str,
-        new_order: int,
-        gpts_name: str,
-        user_query: str,
-        user_code: str = None,
-        sys_code: str = None,
-        enable_verbose: bool = True,
-        stream: Optional[bool] = True,
-        **ext_info,
+            self,
+            conv_id: str,
+            gpts_name: str,
+            user_query: str,
+            user_code: str = None,
+            sys_code: str = None,
+            stream: Optional[bool] = True,
+            **ext_info,
     ):
         logger.info(
             f"agent_chat_v2 conv_id:{conv_id},gpts_name:{gpts_name},user_query:"
             f"{user_query}"
         )
-        gpts_conversations: List[GptsConversationsEntity] = (
-            self.gpts_conversations.get_like_conv_id_asc(conv_id)
-        )
+        gpts_conversations: List[GptsConversationsEntity] = self.gpts_conversations.get_by_session_id_asc(conv_id)
 
         logger.info(
             f"gpts_conversations count:{conv_id}, "
@@ -200,9 +196,8 @@ class MultiAgents(BaseComponent, ABC):
                 is_retry_chat = True
                 agent_conv_id = last_gpts_conversation.conv_id
 
-                gpts_messages: List[GptsMessage] = (
-                    self.gpts_messages_dao.get_by_conv_id(agent_conv_id)
-                )
+                gpts_messages: List[GptsMessage] = self.gpts_messages_dao.get_by_conv_id(agent_conv_id)
+
                 history_message_count = len(gpts_messages)
                 history_messages = gpts_messages
                 last_message = gpts_messages[-1]
@@ -244,13 +239,13 @@ class MultiAgents(BaseComponent, ABC):
                 if gpts_conversations and len(gpts_conversations) > 0:
                     rely_conversations = []
                     if gpt_app.keep_start_rounds + gpt_app.keep_end_rounds < len(
-                        gpts_conversations
+                            gpts_conversations
                     ):
                         if gpt_app.keep_start_rounds > 0:
-                            front = gpts_conversations[gpt_app.keep_start_rounds :]
+                            front = gpts_conversations[gpt_app.keep_start_rounds:]
                             rely_conversations.extend(front)
                         if gpt_app.keep_end_rounds > 0:
-                            back = gpts_conversations[-gpt_app.keep_end_rounds :]
+                            back = gpts_conversations[-gpt_app.keep_end_rounds:]
                             rely_conversations.extend(back)
                     else:
                         rely_conversations = gpts_conversations
@@ -265,6 +260,7 @@ class MultiAgents(BaseComponent, ABC):
             self.gpts_conversations.add(
                 GptsConversationsEntity(
                     conv_id=agent_conv_id,
+                    conv_session_id=conv_id,
                     user_goal=user_query,
                     gpts_name=gpts_name,
                     team_mode=gpt_app.team_mode,
@@ -277,8 +273,8 @@ class MultiAgents(BaseComponent, ABC):
             )
 
         if (
-            TeamMode.AWEL_LAYOUT.value == gpt_app.team_mode
-            and gpt_app.team_context.flow_category == FlowCategory.CHAT_FLOW
+                TeamMode.AWEL_LAYOUT.value == gpt_app.team_mode
+                and gpt_app.team_context.flow_category == FlowCategory.CHAT_FLOW
         ):
             team_context = gpt_app.team_context
             from derisk.core.awel import CommonLLMHttpRequestBody
@@ -297,25 +293,43 @@ class MultiAgents(BaseComponent, ABC):
                 chat_param=team_context.uid,
                 user_name=user_code,
                 sys_code=sys_code,
-                incremental=ext_info.get("incremental", True),
+                incremental=ext_info.get("incremental", False),
             )
             from derisk_app.openapi.api_v1.api_v1 import get_chat_flow
 
             flow_service = get_chat_flow()
             async for chunk in flow_service.chat_stream_flow_str(
-                team_context.uid, flow_req
+                    team_context.uid, flow_req
             ):
                 yield None, chunk, agent_conv_id
         else:
             # init gpts  memory
-            vis_protocal = None
-            if enable_verbose:
-                vis_protocal = GptVisConverter()
+            vis_render = ext_info.get("vis_render", None)
+            app_config = self.system_app.config.configs.get("app_config")
+            web_config = app_config.service.web
+
+            if vis_render and vis_render == "drsk":
+                if not ext_info.get("incremental", False):
+                    from derisk_ext.vis.nex.nex_vis_converter import DrskVisConverter
+                    vis_protocol = DrskVisConverter(drsk_web_url=web_config.web_url)
+                else:
+                    from derisk_ext.vis.nex.nex_vis_incr_converter import DrskVisIncrConverter
+                    vis_protocol = DrskVisIncrConverter(drsk_web_url=web_config.web_url)
+            elif vis_render and vis_render == "drsk_json":
+                from derisk_ext.vis.nex.nex_json_converter import DrskJsonConverter
+                vis_protocol = DrskJsonConverter(drsk_web_url=web_config.web_url)
+            else:
+                logger.warning(f"vis_render_protocol:{vis_render} ！")
+                # 暂时不支持 增量协议
+                ext_info['incremental'] = False
+                from derisk_ext.vis.gptvis.gpt_vis_converter_old import GptVisOldConverter
+                vis_protocol = GptVisOldConverter()
+
             self.memory.init(
                 agent_conv_id,
                 history_messages=history_messages,
                 start_round=history_message_count,
-                vis_converter=vis_protocal,
+                vis_converter=vis_protocol,
             )
             # init agent memory
             agent_memory = self.get_or_build_agent_memory(conv_id, gpts_name)
@@ -324,104 +338,71 @@ class MultiAgents(BaseComponent, ABC):
             try:
                 task = asyncio.create_task(
                     multi_agents.agent_team_chat_new(
-                        user_query,
-                        agent_conv_id,
-                        gpt_app,
-                        agent_memory,
-                        is_retry_chat,
+                        user_query=user_query,
+                        conv_session_id=conv_id,
+                        conv_uid=agent_conv_id,
+                        gpts_app=gpt_app,
+                        agent_memory=agent_memory,
+                        is_retry_chat=is_retry_chat,
                         last_speaker_name=last_speaker_name,
                         init_message_rounds=message_round,
-                        enable_verbose=enable_verbose,
                         historical_dialogues=historical_dialogues,
+                        user_code=user_code,
+                        sys_code=sys_code,
+                        stream=stream,
                         **ext_info,
                     )
                 )
-                if enable_verbose:
-                    async for chunk in multi_agents.chat_messages(agent_conv_id):
-                        if chunk:
-                            try:
-                                chunk = json.dumps(
-                                    {"vis": chunk},
-                                    default=serialize,
-                                    ensure_ascii=False,
-                                )
-                                if chunk is None or len(chunk) <= 0:
-                                    continue
-                                resp = f"data:{chunk}\n\n"
-                                yield task, resp, agent_conv_id
-                            except Exception as e:
-                                logger.exception(
-                                    f"get messages {gpts_name} Exception!" + str(e)
-                                )
-                                yield f"data: {str(e)}\n\n"
 
-                    yield (
-                        task,
-                        _format_vis_msg("[DONE]"),
-                        agent_conv_id,
-                    )
+                async for chunk in multi_agents.chat_messages(agent_conv_id):
+                    if chunk and len(chunk) > 0:
+                        try:
 
-                else:
-                    logger.info(
-                        f"{agent_conv_id}开启简略消息模式，不进行vis协议封装，获取极简流式消息直接输出"
-                    )
-                    # 开启简略消息模式，不进行vis协议封装，获取极简流式消息直接输出
-                    final_message_chunk = None
-                    async for chunk in multi_agents.chat_messages(agent_conv_id):
-                        if chunk:
-                            try:
-                                if chunk is None or len(chunk) <= 0:
-                                    continue
-                                final_message_chunk = chunk[-1]
-                                if stream:
-                                    yield task, final_message_chunk, agent_conv_id
-                                logger.info(
-                                    "agent_chat_v2 executing, timestamp="
-                                    f"{int(time.time() * 1000)}"
-                                )
-                            except Exception as e:
-                                logger.exception(
-                                    f"get messages {gpts_name} Exception!" + str(e)
-                                )
-                                final_message_chunk = str(e)
+                            content = json.dumps(
+                                {"vis": chunk},
+                                default=serialize,
+                                ensure_ascii=False,
+                            )
+                            ## TEST BEGIN >>>>>>>>>>>>>>>>>>>>>
+                            with open("/Users/tuyang.yhj/Downloads/incr_test.jsonl", "a", encoding="utf-8") as file:
+                                file.write(content + "\n")
+                            ## TEST   END <<<<<<<<<<<<<<<<<<<<
 
-                    logger.info(
-                        f"agent_chat_v2 finish, timestamp={int(time.time() * 1000)}"
-                    )
-                    yield task, final_message_chunk, agent_conv_id
+                            resp = f"data:{content}\n\n"
+                            yield task, resp, agent_conv_id
+                        except Exception as e:
+                            logger.exception(
+                                f"get messages {gpts_name} Exception!" + str(e)
+                            )
+                            yield task, f"data: {str(e)}\n\n", agent_conv_id
 
+                yield (
+                    task,
+                    _format_vis_msg("[DONE]"),
+                    agent_conv_id,
+                )
+
+            except asyncio.CancelledError:
+                # 取消时不立即回调
+                logger.info("Generator cancelled, delaying callback")
+                raise
             except Exception as e:
                 logger.exception(f"Agent chat have error!{str(e)}")
-                if enable_verbose:
-                    yield (
-                        task,
-                        _format_vis_msg("[DONE]"),
-                        agent_conv_id,
-                    )
-                    yield (
-                        task,
-                        _format_vis_msg("[DONE]"),
-                        agent_conv_id,
-                    )
-                else:
-                    yield task, str(e), agent_conv_id
+                yield task, str(e), agent_conv_id
 
-            finally:
-                self.memory.clear(agent_conv_id)
+
 
     async def app_agent_chat(
-        self,
-        conv_uid: str,
-        gpts_name: str,
-        user_query: str,
-        user_code: str = None,
-        sys_code: str = None,
-        enable_verbose: bool = True,
-        stream: Optional[bool] = True,
-        **ext_info,
+            self,
+            conv_uid: str,
+            gpts_name: str,
+            user_query: str,
+            user_code: str = None,
+            sys_code: str = None,
+            stream: Optional[bool] = True,
+            **ext_info,
     ):
         # logger.info(f"app_agent_chat:{gpts_name},{user_query},{conv_uid}")
-
         # Temporary compatible scenario messages
         conv_serve = ConversationServe.get_instance(CFG.SYSTEM_APP)
         current_message: StorageConversation = _build_conversation(
@@ -438,26 +419,22 @@ class MultiAgents(BaseComponent, ABC):
         current_message.add_user_message(user_query)
         agent_conv_id = None
         agent_task = None
-        default_final_message = None
         try:
             async for task, chunk, agent_conv_id in multi_agents.agent_chat_v2(
-                conv_uid,
-                current_message.chat_order,
-                gpts_name,
-                user_query,
-                user_code,
-                sys_code,
-                enable_verbose=enable_verbose,
-                stream=stream,
-                **ext_info,
+                    conv_uid,
+                    gpts_name,
+                    user_query,
+                    user_code,
+                    sys_code,
+                    **ext_info,
+                    stream=stream,
             ):
                 agent_task = task
-                default_final_message = chunk
-                yield chunk
+                yield chunk, agent_conv_id
 
         except asyncio.CancelledError:
             # Client disconnects
-            print("Client disconnected")
+            logger.warning("Client disconnected")
             if agent_task:
                 logger.info(f"Chat to App {gpts_name}:{agent_conv_id} Cancel!")
                 agent_task.cancel()
@@ -466,67 +443,270 @@ class MultiAgents(BaseComponent, ABC):
             raise
         finally:
             logger.info(f"save agent chat info！{conv_uid}")
-            if agent_task:
-                final_message = await self.stable_message(agent_conv_id)
-                if final_message:
-                    current_message.add_view_message(final_message)
-            else:
-                default_final_message = default_final_message.replace("data:", "")
-                current_message.add_view_message(default_final_message)
+            if not agent_task:
+                logger.info("对话协程已释放！")
+            await self.save_conversation(agent_conv_id, current_message)
 
-            current_message.end_current_round()
-            current_message.save_to_storage()
 
-    async def agent_team_chat_new(
-        self,
-        user_query: str,
-        conv_uid: str,
-        gpts_app: GptsApp,
-        agent_memory: AgentMemory,
-        is_retry_chat: bool = False,
-        last_speaker_name: str = None,
-        init_message_rounds: int = 0,
-        link_sender: ConversableAgent = None,
-        app_link_start: bool = False,
-        enable_verbose: bool = True,
-        historical_dialogues: Optional[List[GptsMessage]] = None,
-        rely_messages: Optional[List[GptsMessage]] = None,
-        **ext_info,
-    ):
-        gpts_status = Status.COMPLETE.value
+    async def save_conversation(self, agent_conv_id: str, current_message: StorageConversation):
+        logger.info(f"Agent chat end, save conversation {agent_conv_id}!")
+        """统一保存对话结果的逻辑"""
+        final_message = ""
         try:
-            employees: List[Agent] = []
+            final_message = await self.stable_message(agent_conv_id)
+        except Exception as e:
+            logger.error(f"获取{agent_conv_id}最终消息异常: {str(e)}")
 
-            self.agent_manage = get_agent_manager()
+        self.memory.clear(agent_conv_id)
+        current_message.add_view_message(final_message)
+        current_message.end_current_round()
+        current_message.save_to_storage()
 
-            context: AgentContext = AgentContext(
-                conv_id=conv_uid,
-                gpts_app_code=gpts_app.app_code,
-                gpts_app_name=gpts_app.app_name,
-                language=gpts_app.language,
-                app_link_start=app_link_start,
-                enable_vis_message=enable_verbose,
+    async def app_agent_chat_v2(
+            self,
+            conv_uid: str,
+            gpts_name: str,
+            user_query: str,
+            background_tasks: BackgroundTasks,
+            user_code: str = None,
+            sys_code: str = None,
+            stream: Optional[bool] = True,
+            **ext_info,
+    )-> StreamingResponse:
+        # logger.info(f"app_agent_chat:{gpts_name},{user_query},{conv_uid}")
+        # Temporary compatible scenario messages
+        conv_serve = ConversationServe.get_instance(CFG.SYSTEM_APP)
+        current_message: StorageConversation = _build_conversation(
+            conv_id=conv_uid,
+            select_param=gpts_name,
+            summary=user_query,
+            model_name="",
+            app_code=gpts_name,
+            conv_serve=conv_serve,
+            user_name=user_code,
+        )
+        current_message.save_to_storage()
+        current_message.start_new_round()
+        current_message.add_user_message(user_query)
+
+        # 创建独立的任务队列
+        task_queue = asyncio.Queue()
+        # 状态标志
+        processing_complete = asyncio.Event()
+
+        async def agent_processor():
+            """独立处理生成器的协程"""
+            try:
+                async for task, chunk, agent_conv_id in multi_agents.agent_chat_v2(
+                        conv_uid,
+                        gpts_name,
+                        user_query,
+                        user_code,
+                        sys_code,
+                        **ext_info,
+                        stream=stream,
+                ):
+                    await task_queue.put((chunk, agent_conv_id))
+            finally:
+                # 最终标记处理完成
+                processing_complete.set()
+
+        # 启动独立处理任务
+        processor_task = asyncio.create_task(agent_processor())
+
+
+        async def stream_generator() -> AsyncGenerator[str, None]:
+            """带断开检测的流生成器"""
+            client_disconnected = False
+            try:
+                while True:
+                    try:
+                        # 设置超时避免永久阻塞
+                        chunk, agent_conv_id = await asyncio.wait_for(task_queue.get(), timeout=0.01)
+                        yield chunk
+                        task_queue.task_done()
+                    except asyncio.TimeoutError:
+                        if processing_complete.is_set():
+                            break
+            except asyncio.CancelledError:
+                logger.info(f"Client disconnected: {conv_uid}")
+                client_disconnected = True
+                raise
+            finally:
+                if client_disconnected:
+                    # 启动后台清理任务
+                    async def background_cleanup():
+                        try:
+                            # 等待剩余数据处理完成（最多等待30秒）
+                            await asyncio.wait_for(processing_complete.wait(), timeout=30 * 60)
+                        except asyncio.TimeoutError:
+                            logger.warning(f"Timeout waiting for processing: {conv_uid}")
+                        finally:
+                            # 确保保存最终状态
+                            agent_conv_id = conv_uid
+                            if not task_queue.empty():
+                                logger.info(f"Draining {task_queue.qsize()} remaining messages")
+                                while not task_queue.empty():
+                                    chunk, agent_conv_id = task_queue.get_nowait()
+                            # 获取最终对话ID
+                            await multi_agents.save_conversation(agent_conv_id, current_message)
+
+                    background_tasks.add_task(background_cleanup)
+
+        return StreamingResponse(
+            stream_generator(),
+            media_type="text/event-stream",
+            headers={"X-Conversation-ID": conv_uid}
+        )
+
+    async def _build_agent_by_gpts(
+            self,
+            context: AgentContext,
+            agent_memory: AgentMemory,
+            rm: ResourceManager,
+            app: GptsApp,
+            **kwargs
+    ) -> ConversableAgent:
+        """Build a dialogue target agent through gpts configuration"""
+        logger.info(f"_build_agent_by_gpts:{app.app_code},{app.app_name}")
+        employees: List[ConversableAgent] = []
+        if app.details is not None and len(app.details) > 0:
+            employees: List[ConversableAgent] = await self._build_employees(
+                context, agent_memory, rm, [deepcopy(item) for item in app.details]
             )
-
-            prompt_service: PromptService = get_service()
-            rm = get_resource_manager()
-
-            # init llm provider
-            ### init chat param
-            worker_manager = CFG.SYSTEM_APP.get_component(
-                ComponentType.WORKER_MANAGER_FACTORY, WorkerManagerFactory
-            ).create()
-            self.llm_provider = DefaultLLMClient(
-                worker_manager, auto_convert_message=True
-            )
-
-            for record in gpts_app.details:
+        if "extra_agents" in kwargs and kwargs.get("extra_agents"):
+            employees.extend([await self._build_agent_by_gpts(
+                    context, agent_memory, rm, deepcopy(self.gpts_app.app_detail(extra_agent))
+                ) for extra_agent in kwargs.get("extra_agents") if not next((employee for employee in employees if employee.name == extra_agent), None)])
+        team_mode = TeamMode(app.team_mode)
+        prompt_service: PromptService = get_service()
+        if team_mode == TeamMode.SINGLE_AGENT:
+            if employees is not None and len(employees) == 1:
+                recipient = employees[0]
+            else:
+                single_context = app.team_context
                 cls: Type[ConversableAgent] = self.agent_manage.get_by_name(
-                    record.agent_name
+                    single_context.agent_name
+                )
+
+                llm_config = LLMConfig(
+                    llm_client=self.llm_provider,
+                    lm_strategy=LLMStrategyType(single_context.llm_strategy),
+                    strategy_context=single_context.llm_strategy_value,
+                )
+                prompt_template = None
+                if single_context.prompt_template:
+                    prompt_template: PromptTemplate = prompt_service.get_template(
+                        prompt_code=single_context.prompt_template
+                    )
+                depend_resource = await blocking_func_to_async(
+                    CFG.SYSTEM_APP, rm.build_resource, single_context.resources
+                )
+
+                recipient = (
+                    await cls()
+                    .bind(context)
+                    .bind(agent_memory)
+                    .bind(llm_config)
+                    .bind(depend_resource)
+                    .bind(prompt_template)
+                    .build()
+                )
+                recipient.profile.name = app.app_name
+                recipient.profile.desc = app.app_describe
+                recipient.profile.avatar = app.icon
+            return recipient
+        elif TeamMode.AUTO_PLAN == team_mode:
+            if app.team_context:
+                agent_manager = get_agent_manager()
+                auto_team_ctx = app.team_context
+
+                manager_cls: Type[ConversableAgent] = agent_manager.get_by_name(
+                    auto_team_ctx.teamleader
+                )
+                manager = manager_cls()
+                if isinstance(manager, ManagerAgent) and len(employees) > 0:
+                    manager.hire(employees)
+
+                llm_config = LLMConfig(
+                    llm_client=self.llm_provider,
+                    llm_strategy=LLMStrategyType(auto_team_ctx.llm_strategy),
+                    strategy_context=auto_team_ctx.llm_strategy_value,
+                )
+                manager.bind(llm_config)
+
+                if auto_team_ctx.prompt_template:
+                    prompt_template: PromptTemplate = prompt_service.get_template(
+                        prompt_code=auto_team_ctx.prompt_template
+                    )
+                    manager.bind(prompt_template)
+                if auto_team_ctx.resources:
+                    depend_resource = await blocking_func_to_async(
+                        CFG.SYSTEM_APP, rm.build_resource, auto_team_ctx.resources
+                    )
+                    manager.bind(depend_resource)
+
+                manager = await manager.bind(context).bind(agent_memory).build()
+            else:
+                ## default
+                manager = AutoPlanChatManager()
+                llm_config = employees[0].llm_config
+
+                if not employees or len(employees) < 0:
+                    raise ValueError("APP exception no available agent！")
+                manager = (
+                    await manager.bind(context)
+                    .bind(agent_memory)
+                    .bind(llm_config)
+                    .build()
+                )
+                manager.hire(employees)
+
+            manager.profile.name = app.app_name
+            manager.profile.desc = app.app_describe
+            manager.profile.avatar = app.icon
+            logger.info(
+                f"_build_agent_by_gpts return:{manager.profile.name},{manager.profile.desc},{id(manager)}"
+            )
+            return manager
+        elif TeamMode.NATIVE_APP == team_mode:
+            raise ValueError("Native APP chat not supported!")
+        else:
+            raise ValueError(f"Unknown Agent Team Mode!{team_mode}")
+
+    async def _build_employees(
+            self,
+            context: AgentContext,
+            agent_memory: AgentMemory,
+            rm: ResourceManager,
+            app_details: List[GptsAppDetail],
+    ) -> List[ConversableAgent]:
+        """Constructing dialogue members through gpts-related Agent or gpts app information."""
+        logger.info(
+            f"_build_employees:{[item.agent_role + ',' + item.agent_name for item in app_details] if app_details else ''}"
+        )
+        employees: List[ConversableAgent] = []
+        prompt_service: PromptService = get_service()
+        for record in app_details:
+            logger.info(f"_build_employees循环:{record.agent_role},{record.agent_name}")
+            if record.type == "app":
+                gpt_app: GptsApp = deepcopy(self.gpts_app.app_detail(record.agent_role))
+                if not gpt_app:
+                    raise ValueError(f"Not found app {record.agent_role}!")
+                employee_agent = await self._build_agent_by_gpts(
+                    context, agent_memory, rm, gpt_app
+                )
+                logger.info(
+                    f"append employee_agent:{employee_agent.profile.name},{employee_agent.profile.desc},{id(employee_agent)}"
+                )
+                employees.append(employee_agent)
+            else:
+                cls: Type[ConversableAgent] = self.agent_manage.get_by_name(
+                    record.agent_role
                 )
                 llm_config = LLMConfig(
                     llm_client=self.llm_provider,
-                    llm_strategy=LLMStrategyType(record.llm_strategy),
+                    lm_strategy=LLMStrategyType(record.llm_strategy),
                     strategy_context=record.llm_strategy_value,
                 )
                 prompt_template = None
@@ -544,7 +724,7 @@ class MultiAgents(BaseComponent, ABC):
                     .bind(llm_config)
                     .bind(depend_resource)
                     .bind(prompt_template)
-                    .build(is_retry_chat=is_retry_chat)
+                    .build()
                 )
                 if record.agent_describe:
                     temp_profile = agent.profile.copy()
@@ -552,68 +732,63 @@ class MultiAgents(BaseComponent, ABC):
                     temp_profile.name = record.agent_name
                     agent.bind(temp_profile)
                 employees.append(agent)
+        logger.info(
+            f"_build_employees return:{[item.profile.name if item.profile.name else '' + ',' + str(id(item)) for item in employees]}"
+        )
+        return employees
 
-            team_mode = TeamMode(gpts_app.team_mode)
-            if team_mode == TeamMode.SINGLE_AGENT:
-                recipient = employees[0]
-            else:
-                if TeamMode.AUTO_PLAN == team_mode:
-                    if gpts_app.team_context:
-                        agent_manager = get_agent_manager()
-                        auto_team_ctx = gpts_app.team_context
-                        manager_cls: Type[ManagerAgent] = (
-                            agent_manager.get_teamleader_by_name(
-                                auto_team_ctx.teamleader
-                            )
-                        )
-                        manager = manager_cls()
-                        llm_config = LLMConfig(
-                            llm_client=self.llm_provider,
-                            llm_strategy=LLMStrategyType(auto_team_ctx.llm_strategy),
-                            strategy_context=auto_team_ctx.llm_strategy_value,
-                        )
+    async def agent_team_chat_new(
+            self,
+            user_query: str,
+            conv_session_id: str,
+            conv_uid: str,
+            gpts_app: GptsApp,
+            agent_memory: AgentMemory,
+            is_retry_chat: bool = False,
+            last_speaker_name: str = None,
+            init_message_rounds: int = 0,
+            link_sender: ConversableAgent = None,
+            app_link_start: bool = False,
+            historical_dialogues: Optional[List[GptsMessage]] = None,
+            rely_messages: Optional[List[GptsMessage]] = None,
+            stream: Optional[bool] = True,
+            **ext_info,
+    ):
+        gpts_status = Status.COMPLETE.value
+        try:
+            self.agent_manage = get_agent_manager()
 
-                        if auto_team_ctx.prompt_template:
-                            prompt_template: PromptTemplate = (
-                                prompt_service.get_template(
-                                    prompt_code=auto_team_ctx.prompt_template
-                                )
-                            )
-                            manager = manager.bind(prompt_template)
-                        if auto_team_ctx.resources:
-                            manager = manager.bind(auto_team_ctx.resources)
-                        llm_config = llm_config
-                    else:
-                        ## default
-                        manager = AutoPlanChatManager()
-                        llm_config = employees[0].llm_config
+            context: AgentContext = AgentContext(
+                conv_id=conv_uid,
+                conv_session_id=conv_session_id,
+                trace_id=ext_info.get("trace_id", uuid.uuid4().hex),
+                rpc_id=ext_info.get("rpc_id", "0.1"),
+                gpts_app_code=gpts_app.app_code,
+                gpts_app_name=gpts_app.app_name,
+                language=gpts_app.language,
+                app_link_start=app_link_start,
+                incremental=ext_info.get("incremental", False),
+                stream=stream,
+            )
 
-                    if not gpts_app.details or len(gpts_app.details) < 0:
-                        raise ValueError("APP exception no available agent！")
+            root_tracer.start_span(
+                operation_name="agent_chat", parent_span_id=context.trace_id
+            )
 
-                elif TeamMode.AWEL_LAYOUT == team_mode:
-                    if not gpts_app.team_context:
-                        raise ValueError(
-                            "Your APP has not been developed yet, please bind Flow!"
-                        )
-                    manager = DefaultAWELLayoutManager(dag=gpts_app.team_context)
-                    llm_config = LLMConfig(
-                        llm_client=self.llm_provider,
-                        llm_strategy=LLMStrategyType.Priority,
-                        strategy_context=json.dumps(["bailing_proxyllm"]),
-                    )  # TODO
-                elif TeamMode.NATIVE_APP == team_mode:
-                    raise ValueError("Native APP chat not supported!")
-                else:
-                    raise ValueError(f"Unknown Agent Team Mode!{team_mode}")
-                manager = (
-                    await manager.bind(context)
-                    .bind(agent_memory)
-                    .bind(llm_config)
-                    .build()
-                )
-                manager.hire(employees)
-                recipient = manager
+            rm = get_resource_manager()
+
+            # init llm provider
+            ### init chat param
+            worker_manager = CFG.SYSTEM_APP.get_component(
+                ComponentType.WORKER_MANAGER_FACTORY, WorkerManagerFactory
+            ).create()
+            self.llm_provider = DefaultLLMClient(
+                worker_manager, auto_convert_message=True
+            )
+
+            recipient = await self._build_agent_by_gpts(
+                context, agent_memory, rm, gpts_app, **ext_info,
+            )
 
             if is_retry_chat:
                 # retry chat
@@ -632,6 +807,11 @@ class MultiAgents(BaseComponent, ABC):
                 user_proxy: UserProxyAgent = (
                     await UserProxyAgent().bind(context).bind(agent_memory).build()
                 )
+                user_code = ext_info.get("user_code", None)
+                if user_code:
+                    app_config = self.system_app.config.configs.get("app_config")
+                    web_config = app_config.service.web
+                    user_proxy.profile.avatar = f"{web_config.web_url}/user/avatar?loginName={user_code}"
                 await user_proxy.initiate_chat(
                     recipient=recipient,
                     message=user_query,
@@ -654,6 +834,7 @@ class MultiAgents(BaseComponent, ABC):
         except Exception as e:
             logger.error(f"chat abnormal termination！{str(e)}", e)
             self.gpts_conversations.update(conv_uid, Status.FAILED.value)
+            raise ValueError(f"The conversation is abnormal!{str(e)}")
         finally:
             if not app_link_start:
                 await self.memory.complete(conv_uid)
@@ -661,10 +842,10 @@ class MultiAgents(BaseComponent, ABC):
         return conv_uid
 
     async def chat_messages(
-        self,
-        conv_id: str,
-        user_code: str = None,
-        system_app: str = None,
+            self,
+            conv_id: str,
+            user_code: str = None,
+            system_app: str = None,
     ):
         while True:
             queue = self.memory.queue(conv_id)
@@ -679,20 +860,21 @@ class MultiAgents(BaseComponent, ABC):
                 await asyncio.sleep(0.005)
 
     async def stable_message(
-        self, conv_id: str, user_code: str = None, system_app: str = None
+            self, conv_id: str, user_code: str = None, system_app: str = None
     ):
         gpts_conv = self.gpts_conversations.get_by_conv_id(conv_id)
         if gpts_conv:
             is_complete = (
                 True
                 if gpts_conv.state
-                in [Status.COMPLETE.value, Status.WAITING.value, Status.FAILED.value]
+                   in [Status.COMPLETE.value, Status.WAITING.value, Status.FAILED.value]
                 else False
             )
             if is_complete:
-                return await self.memory.vis_messages(conv_id)
+                return await self.memory.vis_final(conv_id)
             else:
-                pass
+                # 未完成 也可以给稳定消息（落库部分）
+                return await self.memory.vis_final(conv_id)
 
         else:
             raise Exception("No conversation record found!")
@@ -701,11 +883,11 @@ class MultiAgents(BaseComponent, ABC):
         return self.gpts_conversations.get_convs(user_code, system_app)
 
     async def topic_terminate(
-        self,
-        conv_id: str,
+            self,
+            conv_id: str,
     ):
         gpts_conversations: List[GptsConversationsEntity] = (
-            self.gpts_conversations.get_like_conv_id_asc(conv_id)
+            self.gpts_conversations.get_by_session_id_asc(conv_id)
         )
         # 检查最后一个对话记录是否完成，如果是等待状态，则要继续进行当前对话
         if gpts_conversations and len(gpts_conversations) > 0:

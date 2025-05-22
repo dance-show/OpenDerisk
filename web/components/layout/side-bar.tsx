@@ -74,6 +74,55 @@ function SideBar() {
     return adminList.some(admin => admin.user_id === user_id);
   }, [adminList]);
 
+  // TODO: unused function
+  // const routes = useMemo(() => {
+  //   const items: RouteItem[] = [
+  //     {
+  //       key: 'app',
+  //       name: t('App'),
+  //       path: '/app',
+  //       icon: <AppstoreOutlined />,
+  //     },
+  //     {
+  //       key: 'flow',
+  //       name: t('awel_flow'),
+  //       icon: <ForkOutlined />,
+  //       path: '/flow',
+  //     },
+  //     {
+  //       key: 'models',
+  //       name: t('model_manage'),
+  //       path: '/models',
+  //       icon: <Icon component={ModelSvg} />,
+  //     },
+  //     {
+  //       key: 'database',
+  //       name: t('Database'),
+  //       icon: <ConsoleSqlOutlined />,
+  //       path: '/database',
+  //     },
+  //     {
+  //       key: 'knowledge',
+  //       name: t('Knowledge_Space'),
+  //       icon: <PartitionOutlined />,
+  //       path: '/knowledge',
+  //     },
+  //     {
+  //       key: 'agent',
+  //       name: t('Plugins'),
+  //       path: '/agent',
+  //       icon: <BuildOutlined />,
+  //     },
+  //     {
+  //       key: 'prompt',
+  //       name: t('Prompt'),
+  //       icon: <MessageOutlined />,
+  //       path: '/prompt',
+  //     },
+  //   ];
+  //   return items;
+  // }, [t]);
+
   const handleToggleMenu = useCallback(() => {
     setIsMenuExpand(!isMenuExpand);
   }, [isMenuExpand, setIsMenuExpand]);
@@ -228,22 +277,38 @@ function SideBar() {
         path: '/chat',
         isActive: pathname.startsWith('/chat'),
       },
+      {
+        key: 'task_management',
+        name: t('task_management'),
+        isActive: pathname === '/taskManagement',
+        icon: (
+          <Image
+            key='image_explore'
+            src={pathname === '/taskManagement' ? '/pictures/explore_active.png' : '/pictures/explore.png'}
+            alt='construct_image'
+            width={40}
+            height={40}
+          />
+        ),
+        path: '/taskManagement',
+      },
       // {
-      //   key: 'task_management',
-      //   name: t('task_management'),
-      //   isActive: pathname === '/taskManagement',
+      //   key: 'construct',
+      //   name: t('construct'),
+      //   isActive: pathname.startsWith('/construct'),
       //   icon: (
       //     <Image
-      //       key='image_explore'
-      //       src={pathname === '/taskManagement' ? '/pictures/explore_active.png' : '/pictures/explore.png'}
+      //       key='image_construct'
+      //       src={pathname.startsWith('/construct') ? '/pictures/app_active.png' : '/pictures/app.png'}
       //       alt='construct_image'
       //       width={40}
       //       height={40}
       //     />
       //   ),
-      //   path: '/taskManagement',
+      //   path: '/construct/app',
       // },
       {
+        //
         key: 'configuration_management',
         name: t('configuration_management'),
         icon: <SettingOutlined style={{ fontSize: '20px', margin: '0 10px' }} />,
@@ -263,6 +328,14 @@ function SideBar() {
             icon: <ConsoleSqlOutlined style={{ fontSize: '20px', margin: '0 10px' }} />,
             path: '/construct/mpc',
           },
+          // {
+          //   key: 'MCP1',
+          //   name: 'MCP1',
+          //   isActive: pathname.startsWith('/construct/mpc1'),
+          //   icon: <ConsoleSqlOutlined style={{ fontSize: '20px', margin: '0 10px' }} />,
+          //   path: '/construct/mpc/detail',
+          //   hideInMenu: true,
+          // },
           {
             key: 'model',
             name: t('modelMenu'),
@@ -273,10 +346,113 @@ function SideBar() {
         ],
       },
     ];
-
+    if (hasAdmin) {
+      items.push({
+        key: 'evaluation',
+        name: '场景评测',
+        icon: (
+          <Image
+            key='image_construct'
+            src={pathname.startsWith('/evaluation') ? '/pictures/app_active.png' : '/pictures/app.png'}
+            alt='construct_image'
+            width={40}
+            height={40}
+          />
+        ),
+        path: '/evaluation',
+        isActive: pathname === '/evaluation',
+      });
+    }
     return items;
   }, [t, pathname, hasAdmin]);
 
+  // TODO: unused function
+  // const dropDownRoutes: ItemType[] = useMemo(() => {
+  //   return routes.map<ItemType>(item => ({
+  //     key: item.key,
+  //     label: (
+  //       <Link href={item.path} className='text-base'>
+  //         {item.icon}
+  //         <span className='ml-2 text-sm'>{item.name}</span>
+  //       </Link>
+  //     ),
+  //   }));
+  // }, [routes]);
+
+  // TODO: unused function
+  // const dropDownSettings: ItemType[] = useMemo(() => {
+  //   return settings
+  //     .filter(item => !item.noDropdownItem)
+  //     .map<ItemType>(item => ({
+  //       key: item.key,
+  //       label: (
+  //         <div className='text-base' onClick={item.onClick}>
+  //           {item.icon}
+  //           <span className='ml-2 text-sm'>{item.name}</span>
+  //         </div>
+  //       ),
+  //     }));
+  // }, [settings]);
+
+  // TODO: unused function
+  // const dropDownFunctions: ItemType[] = useMemo(() => {
+  //   return functions.map<ItemType>(item => ({
+  //     key: item.key,
+  //     label: (
+  //       <Link href={item.path} className='text-base'>
+  //         {item.icon}
+  //         <span className='ml-2 text-sm'>{item.name}</span>
+  //       </Link>
+  //     ),
+  //   }));
+  // }, [functions]);
+
+  // TODO: unused function
+  // const handleDelChat = useCallback(
+  //   (dialogue: IChatDialogueSchema) => {
+  //     Modal.confirm({
+  //       title: 'Delete Chat',
+  //       content: 'Are you sure delete this chat?',
+  //       width: '276px',
+  //       centered: true,
+  //       onOk() {
+  //         return new Promise<void>(async (resolve, reject) => {
+  //           try {
+  //             const [err] = await apiInterceptors(delDialogue(dialogue.conv_uid));
+  //             if (err) {
+  //               reject();
+  //               return;
+  //             }
+  //             message.success('success');
+  //             refreshDialogList();
+  //             dialogue.chat_mode === scene && dialogue.conv_uid === chatId && replace('/');
+  //             resolve();
+  //           } catch (e) {
+  //             reject();
+  //           }
+  //         });
+  //       },
+  //     });
+  //   },
+  //   [chatId, refreshDialogList, replace, scene],
+  // );
+
+  // TODO: unused function
+  // const handleClickChatItem = (item: IChatDialogueSchema) => {
+  //   if (item.chat_mode === 'chat_agent' && item.select_param) {
+  //     setAgent?.(item.select_param);
+  //   }
+  // };
+
+  // TODO: unused function
+  // const copyLink = useCallback((item: IChatDialogueSchema) => {
+  //   const success = copy(`${location.origin}/chat?scene=${item.chat_mode}&id=${item.conv_uid}`);
+  //   message[success ? 'success' : 'error'](success ? 'Copy success' : 'Copy failed');
+  // }, []);
+
+  // useEffect(() => {
+  //   queryDialogueList();
+  // }, [queryDialogueList]);
 
   useEffect(() => {
     const language = i18n.language;
@@ -285,7 +461,7 @@ function SideBar() {
   }, []);
 
   useEffect(() => {
-    setLogo(mode === 'dark' ? '/logo_zh_latest_w.png' : '/logo_zh_latest.png');
+    setLogo(mode === 'dark' ? '/logo_s_latest.png' : '/logo_zh_latest.png');
   }, [mode]);
 
   if (!isMenuExpand) {
@@ -298,7 +474,7 @@ function SideBar() {
       >
         <div>
           <Link href='/' className='flex justify-center items-center pb-4'>
-            <Image src={isMenuExpand ? logo : '/LOGO_SMALL.png'} alt='derisk' width={40} height={40} />
+            <Image src={isMenuExpand ? logo : '/LOGO_SMALL.png'} alt='DB-GPT' width={40} height={40} />
           </Link>
           <div className='flex flex-col gap-4 items-center'>
             {functions.map(i => {
@@ -345,17 +521,17 @@ function SideBar() {
       <div>
         {/* LOGO */}
         <Link href='/' className='flex items-center justify-center p-2 pb-4'>
-          <Image src={isMenuExpand ? logo : '/LOGO_SMALL.png'} alt='derisk' width={180} height={40} />
+          <Image src={isMenuExpand ? logo : '/LOGO_SMALL.png'} alt='DB-GPT' width={180} height={40} />
         </Link>
         {/* functions */}
         <div className='flex flex-col gap-4'>
-          {functions.map((item: RouteItem) => {
+          {functions.map((item: RouteItem, index: number) => {
             if (item?.hideInMenu) return <></>;
             if (item?.children) {
               return (
-                <>
-                  <MenuList value={item} />
-                </>
+                <div key={item?.key }>
+                  <MenuList  value={item} />
+                </div>
               );
             }
             return (

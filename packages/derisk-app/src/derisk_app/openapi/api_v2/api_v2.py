@@ -94,6 +94,8 @@ async def chat_completions(
     check_chat_request(request)
     if request.conv_uid is None:
         request.conv_uid = str(uuid.uuid4())
+    request.trace_id = request.trace_id or uuid.uuid4().hex
+    request.rpc_id = request.rpc_id or "0.1"
     if request.chat_mode == ChatMode.CHAT_APP.value:
         if request.stream is False:
             raise HTTPException(
@@ -229,12 +231,14 @@ async def chat_app_stream_wrapper(request: ChatCompletionRequestBody = None):
         request (OpenAPIChatCompletionRequest): request
         token (APIToken): token
     """
-    async for output in multi_agents.app_agent_chat(
+    async for output, agent_conv_id in multi_agents.app_agent_chat(
         conv_uid=request.conv_uid,
         gpts_name=request.chat_param,
         user_query=request.messages,
         user_code=request.user_name,
         sys_code=request.sys_code,
+        trace_id=request.trace_id,
+        rpc_id=request.rpc_id,
     ):
         match = re.search(r"data:\s*({.*})", output)
         if match:

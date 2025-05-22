@@ -1,6 +1,8 @@
 from typing import Any, List, Optional
 
 from derisk._private.pydantic import BaseModel
+from derisk_app.scene.chat_dashboard.data_preparation.report_schma import ValueItem
+
 
 class DataNode(BaseModel):
     title: Optional[str]

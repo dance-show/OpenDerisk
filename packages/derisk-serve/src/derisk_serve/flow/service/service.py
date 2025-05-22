@@ -3,6 +3,7 @@ import logging
 import os
 from typing import AsyncIterator, List, Optional, cast
 
+import schedule
 from fastapi import HTTPException
 
 from derisk._private.config import Config
@@ -30,6 +31,7 @@ from derisk.core.schema.api import (
 )
 from derisk.storage.metadata import BaseDao
 from derisk.storage.metadata._base_dao import QUERY_SPEC
+from derisk.util.derisks.loader import DERISKsLoader
 from derisk.util.pagination_utils import PaginationResult
 from derisk_serve.core import BaseService, blocking_func_to_async
 
@@ -55,6 +57,7 @@ class Service(BaseService[ServeEntity, ServeRequest, ServerResponse]):
         self._serve_config: ServeConfig = config
         self._dao: ServeDao = dao
         self._flow_factory: FlowFactory = FlowFactory()
+        self._derisks_loader: Optional[DERISKsLoader] = None
 
         super().__init__(system_app)
 
@@ -68,6 +71,12 @@ class Service(BaseService[ServeEntity, ServeRequest, ServerResponse]):
 
         self._dao = self._dao or ServeDao(self._serve_config)
         self._system_app = system_app
+        self._derisks_loader = system_app.get_component(
+            DERISKsLoader.name,
+            DERISKsLoader,
+            or_register_component=DERISKsLoader,
+            load_derisks_interval=self._serve_config.load_derisks_interval,
+        )
 
     def before_start(self):
         """Execute before the application starts"""
@@ -75,15 +84,27 @@ class Service(BaseService[ServeEntity, ServeRequest, ServerResponse]):
         # Register the compat flow at the beginning
         register_compat_flow()
         self._pre_load_dag_from_db()
+        self._pre_load_dag_from_derisks()
 
     def after_start(self):
         """Execute after the application starts"""
         self.load_dag_from_db()
+        self.load_dag_from_derisks(is_first_load=True)
+        schedule.every(self._serve_config.load_derisks_interval).seconds.do(
+            self.load_dag_from_derisks
+        )
 
     @property
     def dao(self) -> BaseDao[ServeEntity, ServeRequest, ServerResponse]:
         """Returns the internal DAO."""
         return self._dao
+
+    @property
+    def derisks_loader(self) -> DERISKsLoader:
+        """Returns the internal DERISKsLoader."""
+        if self._derisks_loader is None:
+            raise ValueError("DERISKsLoader is not initialized")
+        return self._derisks_loader
 
     @property
     def config(self) -> ServeConfig:
@@ -192,6 +213,44 @@ class Service(BaseService[ServeEntity, ServeRequest, ServerResponse]):
             except Exception as e:
                 logger.warning(
                     f"Load DAG({entity.name}, {entity.dag_id}) from db error: {str(e)}"
+                )
+
+    def _pre_load_dag_from_derisks(self):
+        """Pre load DAG from derisks"""
+        flows = self.derisks_loader.get_flows()
+        for flow in flows:
+            try:
+                if flow.define_type == "json":
+                    self._flow_factory.pre_load_requirements(flow)
+            except Exception as e:
+                logger.warning(
+                    f"Pre load requirements for DAG({flow.name}) from "
+                    f"derisks error: {str(e)}"
+                )
+
+    def load_dag_from_derisks(self, is_first_load: bool = False):
+        """Load DAG from derisks"""
+        flows = self.derisks_loader.get_flows()
+        for flow in flows:
+            try:
+                if flow.define_type == "python" and flow.flow_dag is None:
+                    continue
+                # Set state to DEPLOYED
+                flow.state = State.DEPLOYED
+                exist_inst = self.dao.get_one({"name": flow.name})
+                if not exist_inst:
+                    self.create_and_save_dag(flow, save_failed_flow=True)
+                elif is_first_load or exist_inst.state != State.RUNNING:
+                    # TODO check version, must be greater than the exist one
+                    flow.uid = exist_inst.uid
+                    self.update_flow(flow, check_editable=False, save_failed_flow=True)
+            except Exception as e:
+                import traceback
+
+                message = traceback.format_exc()
+                logger.warning(
+                    f"Load DAG {flow.name} from derisks error: {str(e)}, detail: "
+                    f"{message}"
                 )
 
     def update_flow(
@@ -628,6 +687,32 @@ class Service(BaseService[ServeEntity, ServeRequest, ServerResponse]):
                 break
             else:
                 yield f"data:{text}\n\n"
+
+    async def get_flow_files(self, flow_uid: str):
+        logger.info(f"get_flow_files:{flow_uid}")
+
+        flow = self.get({"uid": flow_uid})
+        if not flow:
+            logger.warning(f"cant't find flow info!{flow_uid}")
+            return None
+        package = self.derisks_loader.get_flow_package(flow.name)
+        if package:
+            pkg_path = (
+                f"{package.root.replace(CFG.NOTE_BOOK_ROOT + '/', '')}/{package.name}"
+            )
+            return FlowInfo(
+                name=package.name,
+                definition_type=package.definition_type,
+                description=package.description,
+                label=package.label,
+                package=package.package,
+                package_type=package.package_type,
+                root=package.root,
+                path=pkg_path,
+                version=package.version,
+            )
+        return None
+
 
 def _parse_flow_template_from_json(json_dict: dict) -> ServerResponse:
     """Parse the flow from json

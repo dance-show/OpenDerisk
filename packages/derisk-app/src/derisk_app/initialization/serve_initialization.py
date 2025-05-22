@@ -25,9 +25,11 @@ def scan_serve_configs():
         "derisk_serve.feedback",
         "derisk_serve.file",
         "derisk_serve.flow",
+        "derisk_serve.libro",
         "derisk_serve.model",
         "derisk_serve.prompt",
         "derisk_serve.rag",
+        "derisk_serve.mcp",
     ]
 
     scanner = ModelScanner[BaseServeConfig]()
@@ -207,6 +209,33 @@ def register_serve_apps(
     )
     # ################################ Chat Feedback Register End #####################
 
+    # ################################ derisks Register Begin ##########################
+    # Register serve deriskshub
+    from derisk_serve.derisks.hub.serve import Serve as derisksHubServe
+
+    system_app.register(
+        derisksHubServe,
+        config=get_config(
+            serve_configs,
+            derisksHubServe.name,
+            derisk_serve.derisks.hub.serve.ServeConfig,
+            api_keys=global_api_keys,
+        ),
+    )
+    # Register serve derisksmy
+    from derisk_serve.derisks.my.serve import Serve as derisksMyServe
+
+    system_app.register(
+        derisksMyServe,
+        config=get_config(
+            serve_configs,
+            derisksMyServe.name,
+            derisk_serve.derisks.my.serve.ServeConfig,
+            api_keys=global_api_keys,
+        ),
+    )
+    # ################################ derisks Register End ############################
+
     # ################################ File Serve Register Begin ######################
 
     from derisk.configs.model_config import FILE_SERVER_LOCAL_STORAGE_PATH
@@ -248,6 +277,21 @@ def register_serve_apps(
     )
     # ################################ Evaluate Serve Register End ####################
 
+    # ################################ Libro Serve Register Begin #####################
+    from derisk_serve.libro.serve import Serve as LibroServe
+
+    # Register serve libro
+    system_app.register(
+        LibroServe,
+        config=get_config(
+            serve_configs,
+            LibroServe.name,
+            derisk_serve.libro.serve.ServeConfig,
+            api_keys=global_api_keys,
+        ),
+    )
+
+    # ################################ Libro Serve Register End #######################
 
     # ################################ Model Serve Register Begin #####################
     from derisk_serve.model.serve import Serve as ModelServe
@@ -263,3 +307,18 @@ def register_serve_apps(
             api_keys=global_api_keys,
         ),
     )
+    # ################################ Model Serve Register End #####################
+    # ################################ MCP Serve Register Begin #####################
+    from derisk_serve.mcp.serve import Serve as MCPServe
+
+    # Register serve model
+    system_app.register(
+        MCPServe,
+        config=get_config(
+            serve_configs,
+            MCPServe.name,
+            derisk_serve.mcp.serve.ServeConfig,
+            api_keys=global_api_keys,
+        ),
+    )
+    # ################################ MCP Serve Register End   #####################

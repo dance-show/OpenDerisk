@@ -45,18 +45,37 @@ class ConnectorManager(BaseComponent):
         Load all connector classes.
         """
         from derisk.datasource.rdbms.base import RDBMSConnector  # noqa: F401
+        from derisk_ext.datasource.conn_spark import SparkConnector  # noqa: F401
         from derisk_ext.datasource.conn_tugraph import TuGraphConnector  # noqa: F401
+        from derisk_ext.datasource.rdbms.conn_clickhouse import (  # noqa: F401
+            ClickhouseConnector,
+        )
+        from derisk_ext.datasource.rdbms.conn_doris import DorisConnector  # noqa: F401
+        from derisk_ext.datasource.rdbms.conn_duckdb import (
+            DuckDbConnector,  # noqa: F401
+        )
+        from derisk_ext.datasource.rdbms.conn_hive import HiveConnector  # noqa: F401
+        from derisk_ext.datasource.rdbms.conn_mssql import MSSQLConnector  # noqa: F401
         from derisk_ext.datasource.rdbms.conn_mysql import MySQLConnector  # noqa: F401
         from derisk_ext.datasource.rdbms.conn_oceanbase import (  # noqa: F401
             OceanBaseConnector,
         )
+        from derisk_ext.datasource.rdbms.conn_postgresql import (  # noqa: F401
+            PostgreSQLConnector,
+        )
         from derisk_ext.datasource.rdbms.conn_sqlite import (
             SQLiteConnector,  # noqa: F401
         )
-      
+        from derisk_ext.datasource.rdbms.conn_starrocks import (  # noqa: F401
+            StarRocksConnector,
+        )
+        from derisk_ext.datasource.rdbms.conn_vertica import (  # noqa: F401
+            VerticaConnector,
+        )
         from derisk_ext.datasource.rdbms.dialect.oceanbase.ob_dialect import (  # noqa: F401
             OBDialect,
         )
+
         from .connect_config_db import ConnectConfigEntity  # noqa: F401
 
     def before_start(self):

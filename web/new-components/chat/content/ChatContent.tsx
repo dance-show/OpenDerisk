@@ -1,6 +1,7 @@
 import markdownComponents, { markdownPlugins, preprocessLaTeX } from '@/components/chat/chat-content/config';
 import { IChatDialogueMessageSchema } from '@/types/chat';
 import { STORAGE_USERINFO_KEY } from '@/utils/constants/index';
+import { apiInterceptors, getMetrics } from '@/client/api';
 import {
   CheckOutlined,
   ClockCircleOutlined,
@@ -10,6 +11,7 @@ import {
   LoadingOutlined,
 } from '@ant-design/icons';
 import { GPTVis } from '@antv/gpt-vis';
+import { useRequest } from 'ahooks';
 import { message } from 'antd';
 import classNames from 'classnames';
 import Image from 'next/image';
@@ -99,6 +101,20 @@ const ChatContent: React.FC<{
 
   const isRobot = useMemo(() => role === 'view', [role]);
 
+  //getMetrics
+  // const { run: runGetMetrics, loading: getMetricsLoading } = useRequest(
+  //   async params => {
+  //     const [_, data] = await apiInterceptors(new Promise((resolve, reject) => {resolve({aaaa: '111'})}));
+  //     return data;
+  //   },
+  //   {
+  //     manual: true,
+  //     onSuccess: data => {
+  //       console.log(data, 'data');
+  //     },
+  //   },
+  // );
+
   const { value, cachePluginContext } = useMemo<{
     relations: string[];
     value: string;
@@ -149,6 +165,8 @@ const ChatContent: React.FC<{
           return children;
         }
         const { name, status, err_msg, result } = cachePluginContext[index];
+        console.log(result, 'markdownPluginsmarkdownPlugins12131231');
+
         const { bgClass, icon } = pluginViewStatusMapper[status] ?? {};
         return (
           <div className='bg-white dark:bg-[#212121] rounded-lg overflow-hidden my-2 flex flex-col lg:max-w-[80%]'>
@@ -228,6 +246,7 @@ const ChatContent: React.FC<{
                 <GPTVis components={markdownComponents} {...markdownPlugins}>
                   {preprocessLaTeX(formatMarkdownValForAgent(value))}
                 </GPTVis>
+                // <VisCard chatItem={{ content: {vis: preprocessLaTeX(formatMarkdownValForAgent(value))} }} />
               )}
               {typeof context === 'string' && scene !== 'chat_agent' && (
                 <div>
@@ -240,6 +259,8 @@ const ChatContent: React.FC<{
                   >
                     {preprocessLaTeX(formatMarkdownVal(value))}
                   </GPTVis>
+                  {/* <VisCard content={preprocessLaTeX(formatMarkdownVal(value)) } /> */}
+ 
                 </div>
               )}
               {/* 正在思考 */}

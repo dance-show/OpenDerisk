@@ -2,7 +2,7 @@ import type { TableProps } from 'antd';
 import { Button, Card, Col, Form, Input, Row, Select, Space, Table, Tag } from 'antd';
 import dayjs from 'dayjs';
 import { useTranslation } from 'react-i18next';
-import React, {useState} from 'react';
+
 interface DataType {
   gmtCreate: number;
   gmtModified: number;
@@ -303,9 +303,7 @@ const TaskManagement = () => {
         <Table<DataType> pagination={{
             onChange: (page, pageSize) => {
                 console.log(page, pageSize, 'dasdasdsa');
-            },
-            pageSizeOptions: ['10', '20', '50', '100'],
-
+            }
         }} columns={columns} dataSource={data} scroll={{ x: 'max-content' }} bordered />
       </Card>
     </div>

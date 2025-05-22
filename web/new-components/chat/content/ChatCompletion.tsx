@@ -1,5 +1,6 @@
 import { ChatContext } from '@/app/chat-context';
 import { apiInterceptors, getAppInfo } from '@/client/api';
+import MonacoEditor from '@/components/chat/monaco-editor';
 import ChatContent from '@/new-components/chat/content/ChatContent';
 import { ChatContentContext } from '@/pages/chat';
 import { IApp } from '@/types/app';
@@ -9,8 +10,9 @@ import { useAsyncEffect } from 'ahooks';
 import { Modal } from 'antd';
 import { cloneDeep } from 'lodash';
 import { useSearchParams } from 'next/navigation';
-import React, { useContext, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useContext, useEffect, useMemo, useRef, useState, memo } from 'react';
 import { v4 as uuid } from 'uuid';
+import { useDebounceFn } from 'ahooks';
 
 const ChatCompletion: React.FC = () => {
   const scrollableRef = useRef<HTMLDivElement>(null);
@@ -28,7 +30,7 @@ const ChatCompletion: React.FC = () => {
     setMaxNewTokensValue,
     setResourceValue,
   } = useContext(ChatContentContext);
-
+  const debouncedChat = useDebounceFn(handleChat, { wait: 500 });
   const [jsonModalOpen, setJsonModalOpen] = useState(false);
   const [jsonValue, setJsonValue] = useState<string>('');
 
@@ -45,6 +47,8 @@ const ChatCompletion: React.FC = () => {
   }, [history]);
 
   useAsyncEffect(async () => {
+    console.log(chatId, currentDialogInfo,'chatId, currentDialogInfo');
+    
     const initMessage = getInitMessage();
     if (initMessage && initMessage.id === chatId) {
       const [, res] = await apiInterceptors(
@@ -52,6 +56,7 @@ const ChatCompletion: React.FC = () => {
           ...currentDialogInfo,
         }),
       );
+
       if (res) {
         const paramKey: string[] = res?.param_need?.map(i => i.type) || [];
         const resModel = res?.param_need?.filter(item => item.type === 'model')[0]?.value || model;
@@ -63,7 +68,18 @@ const ChatCompletion: React.FC = () => {
         setMaxNewTokensValue(maxNewTokens || 4000);
         setModelValue(resModel);
         setResourceValue(resource);
-        await handleChat(initMessage.message, {
+        
+        // await handleChat(initMessage.message, {
+        //   app_code: res?.app_code,
+        //   model_name: resModel,
+        //   ...(paramKey?.includes('temperature') && { temperature }),
+        //   ...(paramKey?.includes('max_new_tokens') && { max_new_tokens: maxNewTokens }),
+        //   ...(paramKey.includes('resource') && {
+        //     select_param: typeof resource === 'string' ? resource : JSON.stringify(resource),
+        //   }),
+        // });
+
+        debouncedChat.run(initMessage.message, {
           app_code: res?.app_code,
           model_name: resModel,
           ...(paramKey?.includes('temperature') && { temperature }),
@@ -71,12 +87,13 @@ const ChatCompletion: React.FC = () => {
           ...(paramKey.includes('resource') && {
             select_param: typeof resource === 'string' ? resource : JSON.stringify(resource),
           }),
-        });
+        })
         await refreshDialogList();
         localStorage.removeItem(STORAGE_INIT_MESSAGE_KET);
       }
     }
-  }, [chatId, currentDialogInfo]);
+
+  }, [chatId, JSON.stringify(currentDialogInfo)]);
 
   useEffect(() => {
     setTimeout(() => {
@@ -99,8 +116,24 @@ const ChatCompletion: React.FC = () => {
             />
           );
         })}
+      <Modal
+        title='JSON Editor'
+        open={jsonModalOpen}
+        width='60%'
+        cancelButtonProps={{
+          hidden: true,
+        }}
+        onOk={() => {
+          setJsonModalOpen(false);
+        }}
+        onCancel={() => {
+          setJsonModalOpen(false);
+        }}
+      >
+        <MonacoEditor className='w-full h-[500px]' language='json' value={jsonValue} />
+      </Modal>
     </div>
   );
 };
 
-export default ChatCompletion;
+export default memo(ChatCompletion);
